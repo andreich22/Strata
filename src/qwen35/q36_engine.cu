@@ -17,6 +17,7 @@
 // Modes: --serve (serve/server.py's engine protocol: READY / GEN / T / DONE / STOP / PP), --tokens IDS [--n N]
 // [--force IDS] [--dump-full-logits F] (tools/qwen35/kl.py's reference interface), --bench-pp N / --bench-tg N.
 #include "strata/artifact/gguf_reader.hpp"
+#include "strata/artifact/dequant.hpp"
 #include "strata/core/family_layout.hpp"
 #include "strata/kernels/fused_gdn.hpp"
 #include "strata/kernels/iq_kernels.hpp"
@@ -946,6 +947,14 @@ float* upload_f32(const strata::TensorInfo& t, const uint8_t* src) {
             const float d = f16_to_f32((uint16_t) (q[0] | (q[1] << 8)));
             for (int j = 0; j < 32; ++j) h[b * 32 + j] = d * (float) (int8_t) q[2 + j];
         }
+    } else if (t.type == 12 && h.size() % 256 == 0) {
+        // Q4_K (third-party K-quant files store small projections like ssm_alpha so): 144-byte blocks
+        for (size_t b = 0; b < h.size() / 256; ++b)
+            strata::dequantize_q4_K(src + b * 144, h.data() + b * 256);
+    } else if (t.type == 13 && h.size() % 256 == 0) {
+        // Q5_K (same): 176-byte blocks
+        for (size_t b = 0; b < h.size() / 256; ++b)
+            strata::dequantize_q5_K(src + b * 176, h.data() + b * 256);
     } else {
         std::fprintf(stderr, "strata-q36: %s is %s, expected F32, BF16, F16 or Q8_0\n", t.name.c_str(), t.type_name());
         std::exit(1);
